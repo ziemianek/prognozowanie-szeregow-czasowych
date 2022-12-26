@@ -1,0 +1,1269 @@
+---
+title: "Analiza i prognozowanie szeregów czasowych"
+author: "Michał Ziemianek, Krzysztof Kusztykiewicz"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+    toc_collapsed: true
+    toc_depth: 4
+    highlight: tango 
+    df_print: paged 
+    self-contained: true
+---
+
+<script>
+   $(document).ready(function() {
+     $head = $('#header');
+      });
+</script>
+
+<style type="text/css"> 
+
+body { 
+font-size: 14px; 
+text-align: justify; 
+} 
+
+.biblio {
+  text-align: left;
+}
+
+
+code.r {
+font-size: 14px;
+} 
+
+pre { 
+font-size: 14px
+} 
+
+h1 {
+font-size: 28px;
+} 
+
+h2 { 
+font-size: 24px;
+}
+
+h3 { 
+font-size: 20px;
+} 
+
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+---
+
+# 1. Wstęp
+
+
+## 1.1. Cel projektu
+
+Celem projektu jest zapoznanie się z przetwarzaniem szeregów czasowych, pozyskanych z aktywnych stacji pomiaru jakości powietrza oraz danych meteorologicznych. Do naszych zadań należy m.in. stworzenie różnych modeli opisujących poziom stężenia dwutlenku siarki w powietrzu w zależności od róznych czynników oraz ich późniejsza analiza. Wybrane modee posłużą do prognozy stężenia SO2 w niedalekiej przyszłości. Na końcu zostanie wybrany najlepszy z nich.
+
+
+## 1.2. Dwutlenek siarki
+
+Dwutlenek siarki to silnie toksyczny gaz o gryzącym i duszącym zapachu. Powoduje zakwaszenie gleb i spadek ich żyzności, hamuje także wzrost roślin i przyczynia się do ich obumierania. Na szkodliwe działanie tlenków siarki nie jest odporny również ludzki ludzki organizm. Kontakt z tym związkiem powoduje podrażnienie górnych dróg oddechowych i może przyczyniać się do rozwoju stanów zapalnych i chorób, takich jak zapalenie oskrzeli, płuc czy rozedmy płuc. Poza ściankami tchawicy i oskrzeli odkłada się również w węzłach chłonnych, mózgu, śledzionie i wątrobie. Duże stężenie tlenków siarki w powietrzu może przyczynić się także do zmian patologicznych w rogówce oka. Ponadto dwutlenek siarki niszczy cenne witaminy: A, B1 i B12. Jest także potencjalnie niebezpieczny dla astmatyków ze względu na swoje właściwości alergizujące.
+
+
+---
+
+
+# 2. Przygotowanie danych
+
+
+
+## 2.1 Wczytanie pakietów
+
+Żeby przygotować dane, które będziemy analizować, musieliśmy najpierw zainstalować, a następnie wczytać niezbędne narzędzia m.in.: pakiet `forecast`, który umożliwia prognozowanie, `ggplot2` do wizualizacji, a także zbiór pakietóW `tidyverse` i inne. 
+
+``` {r, message=FALSE, warning=FALSE, echo=FALSE}
+if(!require(devtools)) {install.packages("devtools"); require(devtools)}
+
+library(tidyverse)
+library(worldmet)
+library(lubridate)
+library(ggplot2)
+library(giosimport)
+library(openair)
+library(feasts)
+library(GGally)
+library(forecast)
+library(tsibble)
+library(fpp3)
+library(car)
+library(hydroGOF)
+```
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE, include=FALSE}
+kat_dost <- "C:/Users/48506/Documents/Studia/Studia II rok/Semestr4/PDS/projekt_zaliczenie/PDS_1"
+setwd(kat_dost)
+getwd()
+```
+
+
+
+## 2.2 Pozyskanie danych
+
+Metadane dotyczące stacji oraz stanowisk pobieramy ze strony [Głównego Inspektoratu Ochrony Środowiska](http://powietrze.gios.gov.pl/pjp/current), przy pomocy funkcji `gios_metadane`,  która zawiera się w pakiecie `giosimport`. Oprócz tego pobieramy również statystyki dotyczące poszczególnych substancji w atmosferze.
+
+Dane, niezdębne do wykonia analizy, pozyskaliśmy z dwóch źródeł: danych meteorologicznych, dostarczanych przez amerykańską instytucję [National Oceanic and Atmospheric Administration, NOAA](https://www.noaa.gov/) oraz danych o jakości powietrza udostępnianych przez [GIOŚ](http://powietrze.gios.gov.pl/pjp/current).
+
+Pobranie danych NOAA jest możliwe, dzięki wykorzystaniu pakietu `worldmet`. Dane GIOŚ uzyskaliśmy, używając pakietu `giosimport`.
+
+``` {r, message=FALSE, warning=FALSE, echo=FALSE}
+dt <- read_csv("data.csv")
+```
+
+Dane następnie zostały odpowiednio przetworzone. 
+
+\n
+
+Dane prezentują daty, poziom stężenia SO2 oraz inne zmiene takie jak prędkość wiatru, czy temperatura powietrza, które poddane zostaną analizie. 
+
+\n
+
+Wyglądają obecnie tak:
+
+``` {r, message=FALSE, warning=FALSE, class.source = 'fold-show'}
+
+head(dt)
+
+```
+
+
+---
+
+
+# 3. Analiza wizualna
+
+Pozyskane przez nas dane mają bardzo dobrą kompletność, co znacznie ułatwi przeprowadzenie analizy.
+
+``` {r, message=FALSE, warning=FALSE}
+
+dt %>% 
+  timeAverage(avg.time = "month") %>% 
+  ggplot(aes(x = date, y = obs)) +
+  geom_line(color = "black") + 
+  geom_smooth(se = F, method = "lm")
+
+```
+
+Na wykresie możemy zauważyć silny trend malejący. Dane wykazują pewną sezonowość stężenia dwutlenku siarki - we wcześniejszych latach stężenia są zwykle najwyższe w pierwszym kwartale roku oraz na początku drugiego kwartału. W późniejszych latach ta sezonowość wydaje się zanikać.
+
+\n
+
+Uśrednienie pomiarów do kwartałów pokazuje to dokładniej:
+
+``` {r, message=FALSE, warning=FALSE}
+
+dt %>% 
+  timeAverage(avg.time = "quarter") %>% 
+  ggplot(aes(x = date, y = obs)) +
+  geom_line(color = "black") + 
+  geom_smooth(se = F, method = "lm")
+```
+
+
+Po zapoznaniu się z [artykułem](https://repozytorium.biblos.pk.edu.pl/resources/31152) na temat wpływu warunków meteorologicznych i terenowych na rozprzestrzenianie zanieczyszczeń ze składowisk odpadów komunalnych w powietrzu atmosferycznym wiemy, że stężenie dwutlenku siarki zależy głównie od prędkości wiatru. Sprawdzamy to:
+
+``` {r, message=FALSE, warning=FALSE}
+
+dt %>%  
+  timeAverage(avg.time = "month") %>% 
+  as_tibble(index = date) %>% 
+  timePlot(pollutant = c("obs", "air_temp", "ws"), group = T)
+
+```
+
+Na wykresie wyraźnie widać ww. zależność. Oprócz tego, występuje odwrotna korelacja pomiędzy stężeniem SO2 a temperaturą. Widać też delikatny trend malejący stężenia SO2. Dane wykazują sezonowość.
+
+
+Dane uśredniamy do miesięcy, ponieważ praca z danymi tygodniowymi czy dziennymi wymaga dużo większego nakładu pracy i jest trudniejsza w analizie. Zmieniamy także typ kolumny *date* na `yearmonth`, ponieważ format `POSIXct` nie nadaje się do analizy szeregów czasowych .
+
+``` {r, message=FALSE, warning=FALSE}
+
+dt_miesiac <- dt %>% timeAverage(avg.time = "month")
+
+dt_miesiac_tsibble <- dt_miesiac %>% 
+  mutate(date = yearmonth(format(as.POSIXlt(date), format = "%Y-%m"))) %>% 
+  as_tsibble(index = date)
+
+```
+
+Tworzymy macierz korelacji:
+
+``` {r, message=FALSE, warning=FALSE}
+
+dt_miesiac_tsibble %>% 
+  GGally::ggpairs(columns = 2:ncol(.))
+
+```
+
+Na wykresie widać, że największa korelacja stężenia SO2 występuje z prędkością wiatru  oraz (odwrotna) z temperaturą.
+
+Z uwagi na to, że widoczność oraz punkt rosy są mocno skorelowane z temperaturą oraz ze sobą, można stwierdzić, że nie są one dobrymi predyktorami, dlatego nie będą brane pod uwagę w dalszej analizie.
+
+
+``` {r, message=FALSE, warning=FALSE}
+
+dt_miesiac_tsibble %>%
+  gg_subseries(y = obs)
+
+```
+
+Wykresy podserii pokazują, że najwyższe stężenie SO2 możemy zaobserwować głownie w miesiącach chłodnych - od grudnia do marca. W kwietniu i maju stężenia też są wyższe, niż w pozostałych miesiącach. Można doszukać się wyraźnego trendu malejącego oraz sezonowości.
+
+
+``` {r, message=FALSE, warning=FALSE}
+
+dt_miesiac_tsibble %>%
+  gather(key = "param", value = "obserwacje", obs:RH) %>%
+  gg_subseries()
+
+```
+
+Skumulowany wykres dla wszystkich badanych parametrów potwierdza, że SO2 wykazuje sezonowość.
+
+
+``` {r, message=FALSE, warning=FALSE}
+
+dt_miesiac_tsibble %>%
+  ACF(obs, lag_max = 120) %>% 
+  autoplot()
+```
+
+Funkcja autokorelacji reszt również wykazuje, że stężenia SO2 są sezonowe.
+
+
+# 4. Podstawowe metody prognozowania 
+
+W tej sekcji opisane są podstawowe metody prognozowania.
+
+\n
+
+
+## 4.1 Utworzenie modeli
+
+By utworzyć modele do prognozowania, najpierw musimy podzielić dane na zbiór treningowy i testowy. Za zbiór testowy posłużą nam dane z roku 2020. Resztę danych przydzielamy do zbioru treningowego.
+
+``` {r}
+
+dt_miesiac_tsibble %>% 
+  dplyr::filter(as.numeric(format(date,"%Y")) == 2020) -> ts_test_miesiac
+
+dt_miesiac_tsibble %>% 
+  dplyr::filter(as.numeric(format(date,"%Y")) != 2020) -> ts_train_miesiac
+
+```
+
+Metody tworzenia modeli:
+
+**Metoda Średniej** - prognozy przyszłych wartości są równe wartości średniej z danych historycznych.
+
+``` {r, message=FALSE, warning=FALSE, class.fold='show'}
+
+m1 <- ts_train_miesiac %>% model(MEAN(obs))
+
+```
+
+
+**Metoda naiwna (prosta)** - 'naiwna' ponieważ zakłada, że czynniki określające zmienną prognozowaną są stałe (niezmienne). Prognoza jest wartością ostatniej obserwacji. Tak zwana prognoza losowego marszu.
+
+``` {r, message=FALSE, warning=FALSE, class.fold='show'}
+
+m2 <- ts_train_miesiac %>% model(NAIVE(obs))
+
+```
+
+**Metoda naiwna (sozenowa)** - prognoza jest równa ostatniej obserwacji z każdego sezonu (pory roku, miesiaca, tygodnia itd..). 
+
+\n
+
+*lag* - definiuje długość okresu sezonowego.
+
+``` {r, message=FALSE, warning=FALSE, class.fold='show'}
+
+m3 <- ts_train_miesiac %>% model(SNAIVE(obs ~ lag("year")))
+
+```
+
+**Metoda dryfu (naiwna)** -  prognozy mogą rosnąć lub maleć z czasem, przy czym zmiana ta jest średnią zmianą danych historycznych.
+
+``` {r, message=FALSE, warning=FALSE, class.fold='show'}
+
+m4 <- ts_train_miesiac %>% model(RW(obs ~ drift()))
+
+```
+
+## 4.2 Porównanie prognoz
+
+Wyniki prognoz z predykcją dla dwunastu miesięcy:
+
+``` {r, message=FALSE, warning=FALSE}
+
+gridExtra::grid.arrange(m1 %>% forecast(h = 12) %>% autoplot(dt_miesiac_tsibble) + ggtitle("MEAN") + autolayer(ts_test_miesiac, color = "yellow", size = 0.6), 
+                        m2 %>% forecast(h = 12) %>% autoplot(dt_miesiac_tsibble) + ggtitle("NAIVE") + autolayer(ts_test_miesiac, color = "yellow", size = 0.6),
+                        m3 %>% forecast(h = 12) %>% autoplot(dt_miesiac_tsibble) + ggtitle("SNAIVE") + autolayer(ts_test_miesiac, color = "yellow", size = 0.6),
+                        m4 %>% forecast(h = 12) %>% autoplot(dt_miesiac_tsibble) + ggtitle("RW") + autolayer(ts_test_miesiac, color = "yellow", size = 0.6))
+
+```
+
+Widzimy jak wybrane metody funkcjonują dla całości danych i prognozują rok 2021. Na wykresie możemy zobaczyć, że najbardziej obiecująco wyglądają dwie metody - SNAIVE (metoda naiwna sezonowa) oraz RW (naiwna metoda dryfu). Metoda średniej oraz naiwna nie wyglądają najlepiej. 
+
+``` {r, message=FALSE, warning=FALSE}
+
+fit_smpl <- ts_train_miesiac %>%
+  model(Mean = MEAN(obs),
+        Naive = NAIVE(obs),
+        Snaive = SNAIVE(obs~lag("year")),
+        RW(obs~ drift()))
+
+# dokonujemy prognozy dla 2020
+fc_2020 <- fit_smpl %>% forecast(h = 12)
+
+fc_2020 %>%
+  autoplot(ts_train_miesiac, level = NULL) +        
+  ggtitle("Prognoza stężenia SO2 w 2020 prostymi metodami") +
+  xlab("Rok") + ylab("Stezenie") +
+  guides(colour=guide_legend(title="Forecast")) +
+  autolayer(ts_test_miesiac, color = "yellow", size = 0.6)
+
+```
+
+Widzimy, że tym przypadku, spośród wymienionych metod, średnia okazała się najgorszą. Metoda Snaive wygląda najbardziej obiecująco. 
+
+
+## 4.3 Analiza reszt
+
+``` {r, message=FALSE, warning=FALSE}
+
+# pozyskanie reszt z modelu 
+fit_smpl_resid <- broom::augment(fit_smpl) 
+
+# wykres reszt modeli 
+fit_smpl_resid %>%
+  autoplot(.resid)+
+  facet_wrap(~.model)+
+  ggtitle("Reszty w modelach")+
+  xlab("Rok") + ylab("Reszty")
+
+```
+
+Dla reszt metody średniej istnieje wyraźny trend - reszty są autoskorelowane. Dla Naive nie ma widocznego trendu, ale może występować sezonowość. Możliwa autokorelacja. Na pewno niejednorodnosć wariancji - podobnie w przypadku pozostałych.
+
+``` {r, message=FALSE, warning=FALSE}
+
+fit_smpl_resid %>% 
+  ggpubr::gghistogram('.resid')
+
+```
+
+Reszty przypominają rozkład normalny.
+
+\n
+
+Sprawdzenie autokorelcji.
+
+``` {r, message=FALSE, warning=FALSE}
+
+fit_smpl_resid %>% 
+  ACF(.resid) %>% 
+  autoplot()
+
+```
+
+Najwieksza autokorelacja reszt jest przy metodzie średniej. W każdym modelu autokorelacja występuje.
+
+Najlepszym modelem wydaje się być model SNAIVE z rocznym lagiem.
+
+``` {r, message=FALSE, warning=FALSE}
+
+ts_train_miesiac %>% 
+  model(SNAIVE(obs~lag("year"))) %>% 
+  gg_tsresiduals()
+
+```
+
+Wariancja reszt nie jest idealna, widać niejednorodność. Występuje autokorelacja reszt i mają one rozkład zbliżony do normalnego.
+
+Liczymy średnią z reszt modelu.
+
+``` {r, message=FALSE, warning=FALSE}
+fit_smpl_resid %>% 
+  as_tibble() %>% 
+  select(".resid", ".model") %>%
+  dplyr::filter(.model == "Snaive") %>% 
+  na.omit() %>% 
+  select(.resid) %>% as_vector() %>% mean()
+
+```
+
+Średnia nie jest bliska zera.
+
+
+Podsumowując:
+
+Model | Normalność reszt | Autokorelacja reszt | Jednorodność wariancji | Średnia bliska zero
+------------- | ------------- | ------------- | ------------- | -------------
+SNAIVE | TAK | TAK | NIE | NIE
+
+Model nie jest najlepszy, ale lepszy niż pozostałe trzy.
+
+---
+
+
+# 5. Modele regresji prostej
+
+Sprawdzamy kilka rodzajów regresji, by potem wybrać najlepszy z nich w celu stworzenia prognozy.
+
+
+## 5.1 Tworzenie modeli
+
+
+### 5.1.1. Regresja liniowa
+
+``` {r}
+
+reg_1 <- ts_train_miesiac %>% 
+  model(TSLM(formula = obs~ws)) 
+  
+reg_1 %>% report()
+```
+
+Bardzo słabe dopasowanie, model na wstępie odrzucamy.
+
+
+### 5.1.2. Regresja wieloraka
+
+```{r}
+reg_2 <- ts_train_miesiac %>% 
+  model(TSLM(formula = obs ~ ws + air_temp + visibility + RH)) 
+
+reg_2 %>% report()
+```
+
+W regresji wielorakiej, model ma zdecydowanie lepsze dopasowanie. Niestety, wciąż jest ono dosyć małe. Widać znaczącą istotność wszystkich zmiennych na stężenie SO2. 
+
+
+## 5.2. Porównanie modeli
+
+
+```{r}
+
+bind_rows(reg_1 %>% 
+        augment() %>% 
+        mutate(nazwa = "liniowy"),
+      reg_2 %>% 
+        augment() %>% 
+        mutate(nazwa = "wieloraki")
+) -> dopasowanie
+
+dopasowanie %>% 
+  ggplot(aes(x = date)) +
+  geom_line(aes(y = .fitted,     color = "model")) +
+  geom_line(aes(y = obs, color = "dane")) +
+  facet_wrap(~nazwa, ncol = 1) + labs(color = "Reprezentacja")
+```
+
+Model regresji wielorakiej jest o wiele bardziej dopasowany do rzeczywistych danych.
+
+```{r}
+
+dopasowanie %>% 
+  ggplot(aes(x = obs, y = .fitted, color = nazwa)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1) +
+  facet_wrap(~nazwa, ncol = 1)
+```
+
+Tutaj również bardzo dobrze to widać.
+
+```{r}
+dopasowanie %>% 
+  as.data.frame() %>% 
+  group_by(nazwa) %>% 
+  summarise(kor = cor(obs, .fitted), 
+            res_mean = mean(.resid),
+            res_med = median(.resid))
+
+```
+
+Bezkonkurencyjnie lepszym modelem okazał się być model regresji wielorakiej. Jest dużo lepiej wpasowany, a korelacja wynosi ponad 0,73.
+
+
+## 5.3. Analiza reszt
+
+
+### 5.3.1. Podstawowe założenia
+
+By otrzymać poprawny model regresji, powinniśmy sprawdzić podstawowe założenia dotyczące reszt modelu. 
+
+**Normalność rozkładu reszt modelu** - założenie to sprawdzamy wizualnie przy pomocy wykresu typu kwantyl-kwantyl rozkładu nromalnego. Duża różnica między rozkładem reszt a rozkładem normalnym może zaburzać ocenę istotności współczynników poszczególnych zmiennych modelu.
+
+``` {r}
+
+ggpubr::ggqqplot(reg_2 %>% residuals() %>% pull(.resid))
+
+```
+
+Wykres qqplot przedstawia porównanie kwantyli rozkładu reszt: teoretycznego i prawdziwego (obliczonego z danych). Jeżeli wartości od siebie odbiegają oznacza to, że występuje brak normalności rozkładu reszt modelu. W tym przypadku rozkład odbiega od normalnego. 
+
+**Autokorelacja reszt modelu** - aby zbudowany model można było uznać za poprawny, wartości reszt nie powinny być ze sobą skorelowane. 
+
+**Homoskedastyczność (stałość wariancji)** - w przypadku, gdy nie obserwujemy fluktuacji reszt modelu wraz ze wzrostem wartości zmiennej niezależnej można mówić o stałości reszt, czyli o spełnieniu założenia homoskedastyczności. 
+
+By sprawdzić homoskedastyczność wariancji oraz autokorelację posługujemy się następującymi wykresami:
+
+``` {r}
+
+reg_2 %>% gg_tsresiduals()
+
+```
+
+Na wykresie możemy zobaczyć, że wariancja nie wygląda na jednorodną. Reszty wykazują autokorelację i ich rozkład odbiega od normalnego. By to potwierdzić, przeprowadzamy kilka testów statystycznych. 
+
+
+### 5.3.2. Testy statystyczne
+
+
+**Test Shapiro-Wilka** - test służący do oceny, czy zebrane przez nas wyniki posiadają rozkład normalny. Hipoteza zerowa dla tego testu zakłada, że nasza próba badawcza pochodzi z populacji o normalnym rozkładzie. Jeśli test Shapiro-Wilka osiąga istotność statystyczną (p < 0,05), świadczy to o rozkładzie odbiegającym od krzywej Gaussa.
+
+``` {r}
+
+shapiro.test(reg_2 %>% residuals() %>% pull(.resid))
+
+```
+
+Wynik testu potwierdza, że reszty nie mają rozkładu normalnego. \n
+
+**Test Durbina-Watsona** - pozwala ocenić czy występuje autokorelacja wśród reszt. Aby określić wartość testu Durbina-Watsona informującej o obecności autokorelacji jest skorzystanie z tablic rozkładu Durbina-Watsona. Dla liczby predyktorów w modelu oraz liczby obserwacji otrzymujemy dwie wartości: dl oraz dg. Wartości te określają przedział wyników, dla których nie można stwierdzić, czy zachodzi czy nie zachodzi autokorelacja reszt. 
+
+Statystyka ta zakłada zawsze wartość między 0 a 4. Wartość DW = 2 wykazuje, że w resztach nie występuje autokorelacja. Kiedy wartość jest mniejsza, niż 2, to jesteśmy w hipotezie alternatywnej - reszty wykazują autokorelację dodatnią. Wartość wyższa, niż 2 również wskazuje na autokorelację - tym razem ujemną.
+
+Test ma dwie podstawowe wady. Po pierwsze wykrywa on jedynie autokorelację pierwszego rzędu (czyli pomiędzy kolejnymi resztami). W zbiorze danych mogą wystąpić autokorelacje z opóźnieniem większym, niż 1 . Po drugie, w tablicach występują przedziały bez konkluzji, decyzji odnośnie tego czy występują autokorelacje składnika resztowego. 
+
+W R test Durbina-Watsona można wykonać korzystając z gotowej funkcji, dostępnej w pakiecie `car`.
+
+```{r, warning=FALSE}
+
+durbinWatsonTest(reg_2 %>% residuals() %>% pull(.resid))
+
+```
+
+Z wyniku testu możemy się dowiedzieć, że działa tutaj  hipoteza alternatywna - w resztach występuje autokorelacja dodatnia.
+
+Sprawdzamy średnią z reszt:
+
+``` {r, message=FALSE, warning=FALSE}
+
+reg_2 %>% residuals() %>% pull(.resid) %>% mean()
+
+```
+
+Widzimy, że średnia reszt jest bardzo bliska zera.
+
+Podsumowując:
+
+Model | Normalność reszt | Autokorelacja reszt | Jednorodność wariancji | Średnia bliska zero
+------------- | ------------- | ------------- | ------------- | -------------
+Regresja wieloraka | NIE | TAK | NIE | TAK
+
+
+---
+
+
+# 6. Regresja z trendem i sezonowością
+
+
+## 6.1. Utworzenie modeli
+
+Tworzymy 60 modeli regresji z dodaniem trendu i/lub sezonowości:
+
+``` {r, warning=FALSE}
+list(mod1 = obs ~ ws,    
+     mod2 = obs ~ log(ws)+ trend()+ season(),  
+     mod3 = obs ~ log(ws)+ air_temp+trend()+ season(),  
+     mod4 = obs ~ sqrt(ws)+ log(air_temp)+ trend()+season(),
+     mod5 = obs ~ ws+ wd+ air_temp+ atmos_pres+ trend()+ season(),
+     mod6 = obs ~ log(ws)+ log(dew_point)+ log(dew_point),
+     mod7 = obs ~ log(ws)+   log(air_temp)+ log(dew_point) +trend() + season(),
+     mod8 = obs ~ log(ws)+   log(air_temp)+ log(dew_point) + log(air_temp)+trend()+ season(), 
+     mod9 = obs ~ ws+ air_temp+ wd+ dew_point+ atmos_pres+ visibility+ trend()+ season(),
+     mod10 = obs ~ ws + trend(),
+     mod11 = obs ~ trend() + season(),
+     mod12 = obs ~ dew_point + trend() + season(),
+     mod13 = obs ~ air_temp  + trend() + season(),
+     mod14 = obs ~ visibility + trend() + season(),
+     mod15 = obs ~ ws + trend() + season(),
+     mod16 = log(obs) ~ season(),
+     mod17 = log(obs) ~ dew_point + season(),
+     mod18 = log(obs) ~ air_temp + season(),
+     mod19 = log(obs) ~ visibility + season(),
+     mod20 = log(obs) ~ ws + season(),
+     mod21 = log(obs) ~ trend(),
+     mod22 = log(obs) ~ dew_point + trend(),
+     mod23 = log(obs) ~ air_temp + trend(),
+     mod24 = log(obs) ~ visibility + trend(),
+     mod25 = log(obs) ~ ws + trend(),
+     mod26 = log(obs) ~ trend() + season(),
+     mod27 = log(obs) ~ dew_point + trend() + season(),
+     mod28 = log(obs) ~ air_temp  + trend() + season(),
+     mod29 = log(obs) ~ visibility + trend() + season(),
+     mod30 = log(obs) ~ ws + trend() + season(),
+     mod31 = log10(obs) ~ season(),
+     mod32 = log10(obs) ~ dew_point + season(),
+     mod33 = log10(obs) ~ air_temp + season(),
+     mod34 = log10(obs) ~ visibility + season(),
+     mod35 = log10(obs) ~ ws + season(), 
+     mod36 = log10(obs) ~ trend(),
+     mod37 = log10(obs) ~ dew_point + trend(),
+     mod38 = log10(obs) ~ air_temp + trend(),
+     mod39 = log10(obs) ~ visibility + trend(),
+     mod40 = log10(obs) ~ ws + trend(),
+     mod41 = log10(obs) ~ trend() + season(),
+     mod42 = log10(obs) ~ dew_point + trend() + season(),
+     mod43 = log10(obs) ~ air_temp  + trend() + season(),
+     mod44 = log10(obs) ~ visibility + trend() + season(),
+     mod45 = log10(obs) ~ ws + trend() + season(),
+     mod46 = obs^2 ~ season(),
+     mod47 = obs^2 ~ dew_point + season(),
+     mod48 = obs^2 ~ air_temp + season(),
+     mod49 = obs^2 ~ visibility + season(),
+     mod50 = obs^2 ~ ws + season(),
+     mod51 = obs^2 ~ trend(),
+     mod52 = obs^2 ~ dew_point + trend(),
+     mod53 = obs^2 ~ air_temp + trend(),
+     mod54 = obs^2 ~ visibility + trend(),
+     mod55 = obs^2 ~ ws + trend(),
+     mod56 = obs^2 ~ trend() + season(),
+     mod57 = obs^2 ~ dew_point + trend() + season(),
+     mod58 = obs^2 ~ air_temp  + trend() + season(),
+     mod59 = obs^2 ~ visibility + trend() + season(),
+     mod60 = obs^2 ~ ws + trend() + season()) -> formy
+map(formy, as.formula)  -> formy    
+
+out <- map(.x = formy, 
+           .f = ~model(ts_train_miesiac, 
+                       TSLM(formula = .x)) %>% 
+             glance() 
+) %>% 
+  do.call(rbind, .) %>%  
+  select(.model, r_squared, adj_r_squared, CV, AIC, AICc, BIC)  
+
+out %>% 
+  mutate(.model = formy) %>% 
+  arrange(AIC) %>% 
+  knitr::kable(digits = 2)
+```
+
+Wiele modeli jest do siebie bardzo podobnych. 
+
+
+## 6.2. Wybór najlepszego modelu
+
+Przy wyborze najlepszego modelu spośród ww. kierujemy się przede wszystkim wartością współczynnika determinacji $R^{2}$ oraz wartościami kryteriów informacyjnych AIC, AICC i BIC (ich znaczenie jest opisane w dalszej części).
+
+W tym przypadku najbardziej obiecującym modelem jest `log10(obs) ~ ws + trend() + season()`. Plasuje się on na trzecim miejscu pod względem wartości kryteriów informacyjnych, ale ze względu na wyższy współczynnik R2, niż inne modele, jego wybieramy jako najlepszy.
+
+```{r}
+wybrana_wiel <- model(ts_train_miesiac, TSLM(formula = formy$mod3))  
+wybrana_wiel %>% glance()
+```
+
+
+## 6.3. Analiza reszt
+
+``` {r}
+ggpubr::ggqqplot(wybrana_wiel %>% residuals() %>% pull(.resid)) 
+
+``` 
+
+Rozkład reszt mocno odbiega od normalności.
+
+```{r}
+wybrana_wiel %>% gg_tsresiduals()
+```
+
+Widać, że wariancja nie jest jednorodna. W resztach występuje silna autokorelacja dodatnia. Co ciekawe, w porównaniu do wykresu q-q, rozkład w pewnym stopniu przypomina normalny.
+
+Test Durbina-Watsona:
+
+```{r, class.fold='show'}
+
+durbinWatsonTest(wybrana_wiel %>% residuals() %>% pull(.resid))
+
+```
+
+Test Shapiro-Wilka:
+
+``` {r, class.fold='show'}
+
+shapiro.test(wybrana_wiel %>% residuals() %>% pull(.resid))
+
+```
+
+Test Durbina-Watsona potwierda autokorelację. Dodatkowo, test Shapiro-Wilka potwierdza hipotezę alternatywną - brak normalności rozkładu reszt.
+
+Liczymy średnią z reszt:
+
+``` {r}
+
+wybrana_wiel %>% residuals() %>% pull(.resid) %>% mean()
+
+```
+
+Średnia jest praktycznie równa zero.
+
+Podsumowując:
+
+Model | Normalność reszt | Autokorelacja reszt | Jednorodność wariancji | Średnia bliska zero
+------------- | ------------- | ------------- | ------------- | -------------
+Regresja + trend + sezonowość | NIE | TAK | NIE | TAK
+
+---
+
+
+# 7. Modele ETS i ARIMA
+
+Zarówno ETS, jak i ARIMA to bardzo szeroko używane podejścia do prognozowania szeregów czasowych. Główną róznicą między nimi jest stosób tworzenia modelu - modele ETS bazują na trendzie i sezonowości w danych. ARIMA za to skupia się na autokorelacji wśród danych. 
+
+
+## 7.1. Model ETS
+
+Modele ETS nie są stacjonarne tzn. nie mają stałej średniej w czasie i używają wygładzenia wykładniczego (zmniejszają wariancję za pomocą ważonej średniej ruchomej z przeszłych wartości). Jeśli w danych występuje trend i/lub sezonowość, ten model sprawdza się idealnie. 
+
+
+### 7.1.1. Utworzenie modelu
+
+Za pomocą pakietu `fable` tworzymy model ETS z domyślnymi parametrami.
+
+``` {r}
+
+fit_ets <- ts_train_miesiac %>%
+  model(ETS(obs))
+
+fit_ets %>% report()
+
+```
+
+Widzimy dosyć spore wartości kryteriów AIC, AICC i BIC.
+
+**Kryterium BIC (Bayesowskie kryterium informacyjne Schwartza)** - miara wybierania i porównywania modeli. Mniejsze wartości oznaczają lepszy model.
+
+**Kryterium AIC (Kryterium informacyjne Akaike)** - powszechnie używane kryterium, służące do porównywania modeli statystycznych. Nie dostarcza ono miary dopasowania modelu do danych, ale może być użyteczne do pomiaru i testu względnej mocy predykcyjnej testowanych modeli. Mniejsze wartości oznaczają lepszy model.
+
+**Kryterium AICC - (Skorygowane kryterium Akaike)** - wartość AICC „poprawia” wartość AIC w przypadku małych prób. Przy wzroście wielkości próby wartość AICC zbiega do wartości AIC. Mniejsze wartości oznaczają lepszy model.
+
+Kryteria BIC oraz AIC są najpowszechniej wykorzystywanymi kryteriami informacyjnymi, a więc metodami porównywania modeli dla zmiennej zależnej, aby dokonać selekcji najlepszego modelu. Zgodnie z przyjętą konwencją, najlepszym modelem jest ten dla którego wartość kryterium informacyjnego jest najniższa. 
+
+
+### 7.1.3. Komponenty
+
+``` {r, warning=FALSE}
+
+fit_ets %>% 
+  components() %>%
+  autoplot() +
+  ggtitle("ETS(M,N,M) components")
+
+
+```
+
+
+## 7.2. Model ARIMA
+
+Model ARIMA to autoregresyjny, zintegrowany model średniej ruchomej. Składa się z trzech elementów:
+
+* procesu autoregresyjnego - w którym każda wartość jest liniową kombinacją poprzednich wartości,
+* procesu średniej ruchomej - proces podobny do autoregresyjnego, 
+* integracji - sprowadzenia danych do postaci stacjornarnej (mającej mniej niż 6 opóźnień istotnie mniejszych od zera).
+
+Tworzymy model ARIMA z domyślnymi parametrami:
+
+``` {r}
+
+fit_arima <- ts_train_miesiac %>%
+  model(arima = ARIMA(obs))
+
+fit_arima %>% report()
+
+```
+
+Wszystkie kryteria, na korzysyć tego modelu, są mniejsze, niż w modelu ETS.
+
+
+## 7.3. Walidacja krzyżowa
+
+**Walidacja krzyżowa** - metoda statystyczna polegająca na podziale próby statystycznej na podzbiory, a następnie przeprowadzaniu wszelkich analiz na niektórych z nich, tzw. zbiór uczący, podczas gdy pozostałe służą do potwierdzenia wiarygodności jej wyników, tzw. zbiór testowy.
+
+
+``` {r}
+
+ts_train_miesiac %>%
+  slice(-n()) %>%
+  stretch_tsibble(.init = 5) %>%
+  model(
+    ETS(obs),
+    ARIMA(obs)
+  ) %>%
+  forecast(h = 1) %>%
+  accuracy(ts_train_miesiac)
+
+```
+
+Model ETS okazuje się być lepszy jeśli chodzi o wartości błędów. Przegrywa natomiast pod względem wartości kryteriów. Z tego względu porównujemy jeszcze reszty. 
+
+
+## 7.4. Analiza reszt
+
+Tworzymy wykresy kwantyl-kwantyl modeli:
+
+``` {r}
+gridExtra::grid.arrange(ggpubr::ggqqplot(fit_ets %>% residuals() %>% pull(.resid)) + ggtitle("Wykres Q-Q reszt modelu ETS"), 
+                        ggpubr::ggqqplot(fit_arima %>% residuals() %>% pull(.resid)) + ggtitle("Wykres Q-Q reszt modelu ARIMA"))
+                        
+
+```
+
+W obu modelach rozkład reszt przypomina normalny. Sprawdzamy to jeszcze testem Shapiro-Wilka:
+
+``` {r, class.source = 'fold-show'}
+
+# shapiro-wilk ETS
+
+shapiro.test(fit_ets %>% residuals() %>% pull(.resid))
+
+```
+
+``` {r, class.source = 'fold-show'}
+# shapiro-wilk ARIMA
+
+shapiro.test(fit_arima %>% residuals() %>% pull(.resid))
+
+```
+
+Stastystyka potwierdza normalność rozkładu reszt w modelu ARIMA, natomiast w ETS tej normalności nie ma.
+
+``` {r}
+
+m <- mean(fit_ets%>% residuals() %>% pull(.resid))
+std<-sqrt(var(fit_ets%>% residuals() %>% pull(.resid)))
+
+m1 <- mean(fit_arima%>% residuals() %>% pull(.resid))
+std1<-sqrt(var(fit_arima%>% residuals() %>% pull(.resid)))
+
+par(mfrow = c(1, 2))
+
+hist(fit_ets%>% residuals() %>% pull(.resid), 
+     density=20, breaks=20, prob=TRUE, 
+     xlab="Reszty", ylim=c(0, 3), 
+     main="Rozkład reszt modelu ETS")
+curve(dnorm(x, mean=m, sd=std), 
+      col="darkblue", lwd=2, add=TRUE, yaxt="n")
+
+hist(fit_arima%>% residuals() %>% pull(.resid), 
+     density=20, breaks=20, prob=TRUE, 
+     xlab="Reszty", ylim=c(0, 0.5), 
+     main="Rozkład reszt modelu ARIMA")
+curve(dnorm(x, mean=m1, sd=std1), 
+      col="darkblue", lwd=2, add=TRUE, yaxt="n")
+
+
+```
+
+Histogram rozkładu reszt w modelu ARIMA dobrze obrazuje podobieństwo do krzywej normalnej.
+
+\n
+
+```{r}
+
+fit_arima %>% gg_tsresiduals()
+
+```
+
+Jak widać na wykresie, wariancja nie jest jednorodna. Widać również, że występuje autokorelacja reszt - sprawdzamy to jeszcze testem Durbina-Watsona.
+
+Sprawdzamy autokorelację reszt:
+
+```{r, class.source = 'fold-show'}
+
+# Durbin-Watson ETS
+
+durbinWatsonTest(fit_ets %>% residuals() %>% pull(.resid))
+```
+
+``` {r, class.source = 'fold-show'}
+
+# Durbin-Watson ARIMA
+
+durbinWatsonTest(fit_arima %>% residuals() %>% pull(.resid))
+```
+
+W modelu ETS występuje autokorelacja reszt, natomiast w modelu ARIMA wynik (o dziwo) jest w zaokrągleniu bliski hipozy zerowej - brak autokorelacji.
+
+
+Liczymy średnie reszt dla obu modeli:
+
+```{r}
+
+fit_ets %>% residuals() %>% pull(.resid) %>% mean()
+
+```
+
+W przypadku modelu ETS średnia jest bliska zera.
+
+```{r}
+
+fit_arima %>% residuals() %>% pull(.resid) %>% mean()
+
+```
+
+W przypadku modelu ARIMA średnia jest troszkę większa, co przemawia na korzyść modelu ETS.
+
+
+## 7.5. Wybór najlepszego modelu
+
+Przy wyborze między modelem EST a modelem ARIMA kierowaliśmy się [publikacją](https://rpubs.com/andrea_bert/641847), znalezioną na Rpubs.
+
+Analiza reszt obu modeli pokazała, że są one do siebie zbliżone. Wartości kryteriów przemawiają za modelem ARIMA, podobnie normalność reszt oraz jednorodność wariancji. Mniejsze wartości błędów oraz średnią bliższą zera są w modelu ETS, jednakże ze względu na kryteria oceny dobrego modelu wybieramy model ARIMA. 
+
+Model | Normalność reszt | Autokorelacja reszt | Jednorodność wariancji | Średnia bliska zero
+------------- | ------------- | ------------- | ------------- | -------------
+ARIMA | TAK | NIE | TAK | TAK
+
+---
+
+
+# 8. Model regresji dynamicznej
+
+Modele ETS i ARIMA pozwalają na uwzlędnienie w modelu informacji z obserwacji z przeszłości szeregu czasowego. Nie dają jednak możliości włączenia innych informacji, ktore również mogą być istotne. W modelu regresji dynamicznej możemy np. stosować metodę najmniejszych kwadratów do estymacji. 
+
+Tworzymy dwa modele regresji dynamicznej. W pierwszym łączymy arimę oraz najlepszy przypadek modelu regresji z trendem i sezonowością. W drugim, dodatkowo, oprócz ww. zmiennych uwzględniamy również temperaturę.
+
+```{r}
+
+fit_arima_reg <- ts_train_miesiac %>%
+  model(ARIMA(log10(obs) ~ ws + trend() + season()))
+
+
+fit_arima_reg2 <- ts_train_miesiac %>% 
+  model(ARIMA(log10(obs) ~ ws + air_temp + trend() + season()))
+
+```
+
+Przyjrzyjmy się terazu pierwszemu modelowi, w którym zastosowaliśmy logarytm dziesiętny z naszej zmiennej objaśnianej:
+
+```{r}
+fit_arima_reg %>% report()
+
+```
+
+Kryteria informacyjne są niskie, podobnie wariancja. 
+
+```{r}
+
+fit_arima_reg %>%  gg_tsresiduals()
+
+```
+
+Na wykresie widać, że w resztach brak jest autokorelacji. Wariancja jest raczej jednorodna, z kilkoma wartościami odstającymi. Rozkład reszt nie przypomina normalnego.
+
+```{r}
+
+shapiro.test(fit_arima_reg %>% residuals() %>% pull(.resid))
+
+```
+
+O dziwo test Shapiro-Wilka potwierdza hipotezę zerową - rozkład normalny reszt.
+
+\n
+
+Badamy drugi model, do budowy którego użyliśmy więcej zmiennych, a dodatkowo uwzględnione zostały sezonowość oraz trend.
+
+```{r}
+fit_arima_reg2 %>% report()
+
+```
+
+Model jest bardzo podobny - przyjrzyjmy się resztom.
+
+``` {r}
+
+fit_arima_reg2 %>% gg_tsresiduals()
+
+```
+
+Wariancja wygląda bardzo podobnie do pierwszego modelu. Również widoczny jest brak autokorelacji reszt. Rozkład przypomina normalny - wykonujemy test Shapiro-Wilka, by to ocenić.
+
+```{r}
+shapiro.test(fit_arima_reg2 %>% residuals() %>% pull(.resid))
+```
+
+Statystyka potwierdza, tak jak w przypadku pierwszego modelu, hipotezę zerową.
+
+Ze względu na podobieństo modeli, możemy wywnioskować, że temperatura nie ma istotnego wpływu na stężenie dwutlenku siarki.
+
+Sprawdzamy dodatkowo średnią z reszt:
+
+``` {r}
+
+#M odel 1
+
+fit_arima_reg %>% residuals() %>% pull(.resid) %>% mean()
+
+```
+
+``` {r}
+
+# Model 2
+
+fit_arima_reg2 %>% residuals() %>% pull(.resid) %>% mean()
+
+```
+
+W przypadku modelu pierwszego średnia jest bliższa zera.
+
+Mimo bardzo dużego podobieństwa obu modeli, ze względu na minimalnie lepsze wartości kryteriów informacyjnych, wybieramy drugi model regresji.
+
+
+Model | Normalność reszt | Autokorelacja reszt | Jednorodność wariancji | Średnia bliska zero
+------------- | ------------- | ------------- | ------------- | -------------
+Regresja dynamiczna 2 | TAK | NIE | TAK | TAK
+
+
+---
+
+
+# 9. Transformacje Fouriera
+
+Jest to metoda umożliwiająca dekompozycję funkcji zależnych od czasu lub przestrzeni na funkcje bazujące na częstotliwości. Transormacje fouriera to dobre narzędzie do esktrakcji wzórcow sezonowości w pojedyńczej zmiennej w szeregu czasowym. 
+
+Tworzymy modele i wizualizujemy wyniki: 
+
+``` {r, warning=FALSE, message=FALSE}
+
+fit_fourier <- ts_train_miesiac %>%
+  model(
+    `K = 1` = ARIMA(log(obs) ~ fourier(K = 1) + PDQ(0,0,0)),
+    `K = 2` = ARIMA(log(obs) ~ fourier(K = 2) + PDQ(0,0,0)),
+    `K = 3` = ARIMA(log(obs) ~ fourier(K = 3) + PDQ(0,0,0)),
+    `K = 4` = ARIMA(log(obs) ~ fourier(K = 4) + PDQ(0,0,0)),
+    `K = 5` = ARIMA(log(obs) ~ fourier(K = 5) + PDQ(0,0,0)),
+    `K = 6` = ARIMA(log(obs) ~ fourier(K = 6) + PDQ(0,0,0))
+  )
+
+fit_fourier %>%
+  forecast(h = "6 months") %>%
+  autoplot(ts_train_miesiac, size = 0.5, level = 80) +
+  facet_wrap(vars(.model), ncol = 2) +
+  guides(colour = FALSE)+
+  autolayer(ts_test_miesiac %>% filter(month(date) == c(1:6)), color = "yellow", size = 0.6)
+
+```
+
+
+```{r, warning=FALSE}
+fit_fourier %>% glance()
+```
+
+## 9.1. Wybór najlepszego modelu
+
+Oceniając wizualnie modele, jako najlepszy z nich wybieramy model pierwszy (K = 1).
+
+``` {r}
+
+fit_fourier[1] %>% accuracy()
+
+```
+Błędy są bardzo małe.
+
+
+## 9.2. Analiza reszt
+
+``` {r}
+
+fit_fourier[1] %>% gg_tsresiduals()
+
+```
+
+Widać, że reszty są raczej jednorodne. Widoczny jest brak autokorelacji reszt - potwierdzimy to testem. Rozkład jest dwumodalny i nie przypomina raczej rozkładu normalnego - to również sprawdzimy.
+
+``` {r}
+
+durbinWatsonTest(fit_fourier[1] %>% residuals() %>% pull(.resid))
+
+```
+
+Wynik testu Durbina-Watsona wykazuje minimalną autokorelację reszt.
+
+```{r}
+
+shapiro.test(fit_fourier[1] %>% residuals() %>% pull(.resid))
+
+```
+
+Test Shapiro-Wilka potwierdza hipotezę alternatywną.
+
+Obliczamy jeszcze średnią z reszt:
+
+```{r}
+
+fit_fourier[1] %>% residuals() %>% pull(.resid) %>% mean()
+
+```
+
+Średnia jest bliska zera.
+
+
+Model | Normalność reszt | Autokorelacja reszt | Jednorodność wariancji | Średnia bliska zero
+------------- | ------------- | ------------- | ------------- | -------------
+Fourier K=1 | NIE | NIE | TAK | TAK
+
+
+---
+
+
+# 10. Wyniki
+
+
+## 10.1. Prognoza
+
+Dla każdej z metod wybieramy po jednym modelu - najlepszym w swojej klasie. Wykonujemy następnie prognozę dla zbioru testowego i porównujemy z danymi ze zbioru. 
+
+Wyniki przedstawiono na wykresie:
+
+``` {r, message=FALSE, warning=FALSE}
+
+gridExtra::grid.arrange(m3 %>% forecast(h = 6, bootstrap = T) %>% 
+                          autoplot(ts_train_miesiac) + 
+                          autolayer(ts_test_miesiac %>% filter(month(date) == c(1:6)), color = "yellow", size = 0.6) +
+                          ggtitle("Snaive"),
+                        
+                          fit_arima %>% forecast(h = 6, bootstrap = T) %>% 
+                          autoplot(ts_train_miesiac) +
+                          autolayer(ts_test_miesiac %>% filter(month(date) == c(1:6)), color = "yellow", size = 0.6) + 
+                          ggtitle("ARIMA"),
+                        
+                          wybrana_wiel %>% forecast(bootstrap = T, new_data = ts_test_miesiac %>% filter(month(date) == c(1:6)) ) %>% autoplot(ts_train_miesiac) +
+                          autolayer(ts_test_miesiac %>% filter(month(date) == c(1:6)), color = "yellow", size = 0.6) +
+                          ggtitle("regresja wieloraka"),
+                        
+                          fit_arima_reg2 %>% forecast(bootstrap = T, new_data = ts_test_miesiac %>% filter(month(date) == c(1:6)) ) %>% autoplot(ts_train_miesiac) +
+                          autolayer(ts_test_miesiac %>% filter(month(date) == c(1:6)), color = "yellow", size = 0.6) +
+                          ggtitle("model dynammiczny ARIMA + regreja"),
+                        
+                          fit_fourier[6]%>% forecast(bootstrap = T, new_data = ts_test_miesiac %>% filter(month(date) == c(1:6)) ) %>% autoplot(ts_train_miesiac) +
+                          autolayer(ts_test_miesiac %>% filter(month(date) == c(1:6)), color = "yellow", size = 0.6) +
+                          ggtitle("transformacje fouriera"))
+
+```
+
+Na wykresie widać, że wszystkie wybrane przez nas modele dają podobną prognozę. Musimy porównać ich parametry.
+
+
+## 10.2. Wybór najlepszego modelu
+
+Korzystając z pakietu `hydroGOF` porównujemy wyniki predykcji dla zbioru testowego.
+Tworzymy zbiorczą tabelę parametrów dla wszystkich modeli:
+
+```{r}
+
+cbind(
+gof(m3 %>% forecast(h = 6, bootstrap = T) %>% pull(.mean), 
+    ts_test_miesiac %>% filter(month(date) == c(1:6)) %>% pull(obs)),
+
+gof(fit_arima %>% forecast(h = 6, bootstrap = T) %>% pull(.mean), 
+    ts_test_miesiac %>% filter(month(date) == c(1:6)) %>% pull(obs)),
+
+gof(wybrana_wiel %>% forecast(bootstrap = T, new_data = ts_test_miesiac %>% filter(month(date) == c(1:6)) )%>% pull(.mean), 
+    ts_test_miesiac %>% filter(month(date) == c(1:6)) %>% pull(obs)),
+
+gof(fit_arima_reg2 %>% forecast(bootstrap = T, new_data = ts_test_miesiac %>% filter(month(date) == c(1:6)) )%>% pull(.mean),
+    ts_test_miesiac %>% filter(month(date) == c(1:6)) %>% pull(obs)),
+
+gof(fit_fourier[1]%>% forecast(bootstrap = T, new_data = ts_test_miesiac %>% filter(month(date) == c(1:6)) )%>% pull(.mean),
+    ts_test_miesiac %>% filter(month(date) == c(1:6)) %>% pull(obs))
+    ) %>% as.data.frame() -> wyn_tab 
+  
+  colnames(wyn_tab) <- c("snaive", "arima", "reg_wiel", "reg_dyn", "fourier")
+  wyn_tab %>% knitr::kable(digits = 2)
+
+```
+
+Na podstawie bardzo niskiego stopnia dopasowania, wyznaczonego przez współczynnik R2, między predykcją dla zbioru danych testowych, a rzeczywistymi wartościami oraz kryteria oceny modelu odrzucamy modele: SNAIVE, ARIMA oraz transformacji fouriera jako niewystarczające. 
+
+Pozostałe modele to Regresja dynamiczna oraz Regresja wieloraka z trendem i sezonowością. 
+
+Regresja wieloraka z trendem i sezonowością cechuje się mniejszymi, niż dynamiczna, średnimi błędami predykcji w zbiorze testowym. Występuje też prawie dwukrotnie lepsze dopasowanie na podstawie współczynnika R2. Niestety nie spełnia wszystkich kryteriów dobrego modelu. Reszty nie mają rozkładu normalnego, występuje autokorelacja reszt oraz brak jednorodnosci wariancji. Warto zwrócić uwagę, że średnia z reszt modelu jest bardzo niska - praktycznie równa 0. 
+
+Model regresji dynamicznej spełnia wszystkie kryteria dobrego modelu: nie występuje autokorelacja reszt modelu oraz mają one rozkład normalny. Wariancja reszt jest jednorodna, a średnia bliska 0.
+
+Po porównaniu modeli pod kątem kryteriów informacyjnych okazuje się, że model regreji wielorakiej cechuje się o wiele niższymi kryteriami AIC i BIC.
+
+Jako ostateczny, najlepszy model, wybieramy **model regresji wielorakiej**, która pomimo niespełniania wszystkich kryteriów dobrego modelu, cechuje się dobrym dopasowaniem w zbiorze treningowym oraz najlepszym dopasowaniem w zbiorze testowym - wskazują na to również kryteria informacyjne. 
+
+
+---
+
+
+# 11. Wnioski
+
+
+Otrzymana prognoza wartości, przez nienajlepsze dopasowanie modelu, odbiega od danych rzeczywistych. 
+
+Pomimo, że dopasowanie modeli nie jest zbyt dobre, to daje pogląd na to, co można w nich ulepszyć. Pokazuje, jak ważny jest dobór odpowiednich predyktorów oraz jak trudne i czasochłonne jest stworzenie dobrego modelu, który będzie działał nie tylko z konkretnymi danymi. 
+
+Przeprowadzone przez nas modelowanie nie przyniosło idealnych rezultatów. Dane, na których pracowaliśmy nie układały się w pożądany przez nas sposób, co widać na wykresach, gdzie zaobserwowaliśmy niejednokrotnie niejednorodność wariancji czy brak normalności rozkładu modelu. Zadziwiające niekiedy były wyniki testu Shapiro-Wilka, który czasami stwierdzał normalność rozkładu, pomimo że wizualnie odbiegał on od normalności.
+
+Dzięki przeprowadzonej analizie jesteśmy za to w stanie stwierdzić od jakich zmiennych zależą poszczególne parametry, i które predyktory mają największy wpływ na wybraną, badaną zmienną. Świetnie została ukazana sezonowość oraz dla wybranych modeli trend.
+
+Stwierdzamy, że wyniki mogłyby być lepsze, gdyby bardziej zagłębić się w parametry modeli - my zwykle używaliśmy domyślnych. Wine może mieć też sama badana substancja - może ciężko jest przewidzieć z dużą dokładnością stężenia SO2. 
+
+
+---
+
+
+# 12. Bibliografia
+
+<section class="biblio">
+
+1) [https://smoglab.pl/dwutlenek-siarki-w-polsce-zle-na-balkanach-gorzej-czym-truje-nas-smog-4/ (dostęp 11.06.2022)](https://smoglab.pl/dwutlenek-siarki-w-polsce-zle-na-balkanach-gorzej-czym-truje-nas-smog-4/)
+
+2) [https://medium.com/analytics-vidhya/time-series-forecasting-models-726f7968a2c1 (dostęp 11.06.2022)](https://medium.com/analytics-vidhya/time-series-forecasting-models-726f7968a2c1);
+
+3) [https://link.springer.com/chapter/10.1007/978-0-387-75959-3_5 (dostęp 11.06.2022)](https://link.springer.com/chapter/10.1007/978-0-387-75959-3_5);
+
+4) [https://pl.wikipedia.org/wiki/Sprawdzian_krzy%C5%BCowy (dostęp 11.06.2022)](https://pl.wikipedia.org/wiki/Sprawdzian_krzy%C5%BCowy)
+
+5) [https://pl.wikipedia.org/wiki/Wyg%C5%82adzanie_wyk%C5%82adnicze (dostęp 11.06.2022)](https://pl.wikipedia.org/wiki/Wyg%C5%82adzanie_wyk%C5%82adnicze)
+
+6) [https://otexts.com/fpp3/dynamic.html (dostęp 11.06.2022)](https://otexts.com/fpp3/dynamic.html)
+
+7) [https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=&ved=2ahUKEwj8mOHS9aP4AhXltYsKHYbqDLwQFnoECAUQAQ&url=https%3A%2F%2Fsupport.predictivesolutions.pl%2Fekspress%2Fdownload%2FEB54%2Fmat%2Fmodel_ARIMA_istotnosc_parametrow.pdf&usg=AOvVaw1tUm4E3CRERqpeX0nPMPTY (dostęp 11.06.2022)](https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=&ved=2ahUKEwj8mOHS9aP4AhXltYsKHYbqDLwQFnoECAUQAQ&url=https%3A%2F%2Fsupport.predictivesolutions.pl%2Fekspress%2Fdownload%2FEB54%2Fmat%2Fmodel_ARIMA_istotnosc_parametrow.pdf&usg=AOvVaw1tUm4E3CRERqpeX0nPMPTY)
+
+8) [http://manuals.pqstat.pl/statpqpl:wielowympl:wielorpl:analrpl (dostęp 11.06.2022)](http://manuals.pqstat.pl/statpqpl:wielowympl:wielorpl:analrpl)
+
+9) [https://pogotowiestatystyczne.pl/slowniki/test-shapiro-wilka/ (dostęp 11.06.2022)](https://pogotowiestatystyczne.pl/slowniki/test-shapiro-wilka/)
+
+10) [https://www.naukowiec.org/wiedza/statystyka/test-durbina-watsona-niezaleznosc-bledow-obserwacji_423.html (dostęp 11.06.2022)](https://www.naukowiec.org/wiedza/statystyka/test-durbina-watsona-niezaleznosc-bledow-obserwacji_423.html)
+
+11) [https://corporatefinanceinstitute.com/resources/knowledge/other/durbin-watson-statistic/ (dostęp 11.06.2022)](https://corporatefinanceinstitute.com/resources/knowledge/other/durbin-watson-statistic/)
+
+12) [https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=&cad=rja&uact=8&ved=2ahUKEwil7tz8qab4AhUs-yoKHYSkBk4QFnoECAQQAQ&url=https%3A%2F%2Fyadda.icm.edu.pl%2Fyadda%2Felement%2Fbwmeta1.element.baztech-2a931fd8-fcff-4d48-bc6f-e81ade346bfc%2Fc%2F142_217_EiT_KASYK.pdf&usg=AOvVaw2csXTp4dv2G2oCh-39dCsK (dostęp 11.06.2022)](https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=&cad=rja&uact=8&ved=2ahUKEwil7tz8qab4AhUs-yoKHYSkBk4QFnoECAQQAQ&url=https%3A%2F%2Fyadda.icm.edu.pl%2Fyadda%2Felement%2Fbwmeta1.element.baztech-2a931fd8-fcff-4d48-bc6f-e81ade346bfc%2Fc%2F142_217_EiT_KASYK.pdf&usg=AOvVaw2csXTp4dv2G2oCh-39dCsK)
+
+13) [https://www.ibm.com/docs/pl/spss-modeler/SaaS?topic=analysis-basics-twostep-as-cluster (dostęp 11.06.2022)](https://www.ibm.com/docs/pl/spss-modeler/SaaS?topic=analysis-basics-twostep-as-cluster)
+
+14) [https://www.ibm.com/docs/pl/spss-statistics/SaaS?topic=models-model-summary-generalized-linear-mixed (dostęp 11.06.2022)](https://www.ibm.com/docs/pl/spss-statistics/SaaS?topic=models-model-summary-generalized-linear-mixed)
+
+15) [https://towardsdatascience.com/fourier-transform-for-time-series-292eb887b101 (dostęp 13.06.2022)](https://towardsdatascience.com/fourier-transform-for-time-series-292eb887b101)
+
+</section>
